@@ -1,83 +1,64 @@
 # D6 — Browser Forensics
 
-Extracts and analyzes browser history and bookmarks from Chrome and Firefox.
+Chrome/SQLite history, visits, downloads and bookmark artifact parsing with visited-URL timeline reconstruction.
 
-## Overview
+## IMPORTANT: Read before use.
 
-This project parses browser SQLite databases to extract:
-- Chrome History / Bookmarks
-- Firefox places.sqlite (history + bookmarks)
-- Visit timestamps and referrer relationships
-- URL categorization (social, search, media, finance, etc.)
+This tool is for **authorized educational and blue-team analysis only**. Analyze browser artifacts only on systems/profiles you own or are permitted to examine. The bundled fixture is fully synthetic (fictional domains). No real personal data is stored.
 
 ## Features
 
-- **Chrome**: parses `History` and JSON `Bookmarks` files
-- **Firefox**: parses `places.sqlite` (history and bookmarks)
-- **Timestamps**: converts Chrome (1601 epoch) and Firefox (1970 epoch) formats
-- **Categorization**: groups URLs by site category
-- **Self-test**: generates a sample database when no args given
+- **Chrome SQLite parsing** via stdlib `sqlite3`: `urls`, `visits`, `downloads`, `downloads_url_chains`
+- **Chrome epoch decoding**: microseconds since 1601-01-01 → ISO datetime
+- **Visited-URL timeline**: merges url records and visit events, time-ordered
+- **Category breakdown**: search, social, media, email, finance, other
+- **Download artifact extraction**: path, source URL, size, start time
+- **Artifacts JSON output**
 
-## Usage
+## Quick Start
 
 ```bash
-python3 browser.py chrome /path/to/chrome/Profile
-python3 browser.py firefox /path/to/firefox/profile
-python3 browser.py   # runs self-test with a generated DB
+# Analyze the bundled synthetic Chrome history fixture
+python3 cli.py --demo
+
+# Analyze a real profile's History file (read-only)
+python3 cli.py --input /path/to/Chrome/History --output reports/artifacts.json
 ```
 
-## Example Output
+## Parsed Formats
 
+| Table | Data Extracted |
+|-------|----------------|
+| `urls` | url, title, visit_count, last_visit_time |
+| `visits` | url, visit_time, from_visit, visit_duration |
+| `downloads` | path, start_time, received/total bytes |
+| `downloads_url_chains` | download → source URL mapping |
+
+## Testing
+
+```bash
+python3 -m unittest discover -s tests
 ```
-=== D6 - Browser Forensics (Chrome) ===
-History entries: 2
 
--- Category breakdown --
-  other      1
-  search     1
+Fixtures regenerated with:
 
--- Recent history --
-  2024-01-15T09:30:00 https://example.com
+```bash
+python3 tests/generate_fixtures.py
 ```
 
-## Legal Disclaimer
+## Live Lab Test Plan
 
-**IMPORTANT: Read before use.**
+1. Run `python3 cli.py --demo` — should exit 0, print history/downloads, write `reports/d6_artifacts.json`
+2. Run `python3 -m unittest discover -s tests` — all tests pass
+3. Verify the visited-URL timeline is time-ordered and downloads include source URLs
 
-This project is provided for **educational and authorized security testing purposes only**. 
+## Metrics
 
-### Authorization Requirements
-- You MUST have explicit written permission from the network owner before using this tool
-- Unauthorized interception of network communications is illegal under federal and state laws
-- This tool should ONLY be used on networks you own or have written authorization to test
-
-### Legal Framework
-- **Computer Fraud and Abuse Act (CFAA)**: Unauthorized access to computer systems is a federal crime
-- **Wiretap Act (18 U.S.C. § 2511)**: Interception of electronic communications without consent is illegal
-- **State Laws**: Many states have additional computer crime and wiretapping statutes
-- **GDPR/CCPA**: Data collection may be subject to privacy regulations
-
-### Acceptable Use
-- Testing security of your own networks
-- Authorized penetration testing with written scope
-- Academic research in controlled lab environments
-- Security education and training
-
-### Prohibited Use
-- Intercepting communications on networks you do not own
-- Attacking infrastructure without authorization
-- Any activity that violates applicable laws or regulations
-- Commercial use without proper licensing
-
-### No Warranty
-This software is provided "AS IS" without warranty of any kind. The author is not responsible for any misuse or damage caused by this software.
-
-### Responsible Disclosure
-If you discover vulnerabilities using this tool, follow responsible disclosure practices:
-1. Report to the vendor/owner privately
-2. Allow reasonable time for remediation
-3. Do not exploit beyond proof of concept
+- Formats parsed: Chrome SQLite (`urls`, `visits`, `downloads`, `downloads_url_chains`)
+- Artifact types: 3 (url records, visits, downloads)
+- Test count: 10
+- Demo exit code: 0
 
 ## License
 
-MIT
+MIT License — see [LICENSE](LICENSE).

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """D6 - Browser Forensics
 
-Chrome/Firefox SQLite history extraction, bookmark analysis.
-Uses sqlite3, os, json only.
+Chrome/Firefox SQLite history/bookmark/download parsing, artifact timeline, category breakdown.
+Uses stdlib sqlite3, os, json only.
 """
 
 import sqlite3
@@ -11,15 +11,11 @@ import sys
 import json
 from datetime import datetime, timedelta
 
-CHROME_HISTORY_SCHEMA = "urls, visits"
-FIREFOX_SCHEMA = "moz_places, moz_historyvisits"
-
 
 def chrome_epoch(us):
-    """Chrome uses microseconds since 1601-01-01."""
+    """Chrome microseconds since 1601-01-01."""
     try:
-        epoch = datetime(1601, 1, 1)
-        return epoch + timedelta(microseconds=us)
+        return datetime(1601, 1, 1) + timedelta(microseconds=us)
     except Exception:
         return None
 
@@ -34,8 +30,8 @@ def chrome_history(db_path):
     rows = []
     try:
         cur.execute(
-            "SELECT u.id, u.url, u.title, u.visit_count, "
-            "u.last_visit_time FROM urls u ORDER BY u.last_visit_time DESC LIMIT 500"
+            "SELECT u.id, u.url, u.title, u.visit_count, u.last_visit_time "
+            "FROM urls u ORDER BY u.last_visit_time DESC LIMIT 1000"
         )
         for url_id, url, title, vc, last in cur.fetchall():
             ts = chrome_epoch(last)
@@ -45,19 +41,20 @@ def chrome_history(db_path):
                 "url": url,
                 "title": title,
                 "visit_count": vc,
-                "last_visit": ts.isoformat() if ts else None,
+                "last_visit": chrome_epoch(last).isoformat() if last else None,
             })
         cur.execute(
-            "SELECT v.id, v.url, v.visit_time, v.from_visit FROM visits v "
-            "ORDER BY v.visit_time DESC LIMIT 500"
+            "SELECT v.id, v.url, v.visit_time, v.from_visit, v.visit_duration "
+            "FROM visits v ORDER BY v.visit_time DESC LIMIT 1000"
         )
-        for vid, urn, vt, fromv in cur.fetchall():
-            ts = chrome_epoch(vt)
+        for vid, urn, vt, fromv, dur in cur.fetchall():
             rows.append({
                 "type": "visit",
                 "id": vid,
-                "visit_time": ts.isoformat() if ts else None,
+                "url": urn,
+                "visit_time": chrome_epoch(vt).isoformat() if vt else None,
                 "from_visit": fromv,
+                "visit_duration_s": dur / 1_000_000 if dur else 0,
             })
     except sqlite3.Error as e:
         conn.close()
@@ -66,114 +63,38 @@ def chrome_history(db_path):
     return rows
 
 
-def chrome_bookmarks(db_path):
+def chrome_downloads(db_path):
     conn = _open_ro(db_path)
     cur = conn.cursor()
     rows = []
     try:
         cur.execute(
-            "SELECT b.id, b.type, b.title, b.url, b.date_added, "
-            "(SELECT title FROM bookmarks p WHERE p.id=b.parent_id) AS parent "
-            "FROM bookmarks b"
+            "SELECT d.id, d.current_path, d.target_path, d.start_time, "
+            "d.received_bytes, d.total_bytes, du.url "
+            "FROM downloads d LEFT JOIN downloads_url_chains du ON du.download_id=d.id "
+            "ORDER BY d.start_time"
         )
-        for bid, btype, title, url, added, parent in cur.fetchall():
-            ts = chrome_epoch(added)
+        for did, cpath, tpath, start, recv, tot, url in cur.fetchall():
             rows.append({
-                "id": bid,
-                "type": btype,
-                "title": title,
+                "id": did,
+                "current_path": cpath,
+                "target_path": tpath,
                 "url": url,
-                "parent": parent,
-                "date_added": ts.isoformat() if ts else None,
+                "start_time": chrome_epoch(start).isoformat() if start else None,
+                "received_bytes": recv,
+                "total_bytes": tot,
             })
     except sqlite3.Error as e:
         conn.close()
-        raise ValueError("Bookmark query failed: %s" % e)
+        raise ValueError("Downloads query failed: %s" % e)
     conn.close()
     return rows
 
 
-def firefox_history(db_path):
-    conn = _open_ro(db_path)
-    cur = conn.cursor()
-    rows = []
-    try:
-        cur.execute(
-            "SELECT p.id, p.url, p.title, "
-            "(SELECT COUNT(*) FROM moz_historyvisits v WHERE v.place_id=p.id) AS visits, "
-            "(SELECT MAX(v.visit_date) FROM moz_historyvisits v WHERE v.place_id=p.id) AS last "
-            "FROM moz_places p ORDER BY last DESC LIMIT 500"
-        )
-        for pid, url, title, visits, last in cur.fetchall():
-            ts = None
-            if last:
-                try:
-                    ts = (datetime(1970, 1, 1) + timedelta(microseconds=last)).isoformat()
-                except Exception:
-                    ts = None
-            rows.append({
-                "type": "place",
-                "id": pid,
-                "url": url,
-                "title": title,
-                "visit_count": visits,
-                "last_visit": ts,
-            })
-        cur.execute(
-            "SELECT v.id, v.place_id, v.visit_date, v.from_visit "
-            "FROM moz_historyvisits v ORDER BY v.visit_date DESC LIMIT 500"
-        )
-        for vid, pid, vd, fromv in cur.fetchall():
-            ts = None
-            if vd:
-                try:
-                    ts = (datetime(1970, 1, 1) + timedelta(microseconds=vd)).isoformat()
-                except Exception:
-                    ts = None
-            rows.append({
-                "type": "visit",
-                "id": vid,
-                "place_id": pid,
-                "visit_time": ts,
-                "from_visit": fromv,
-            })
-    except sqlite3.Error as e:
-        conn.close()
-        raise ValueError("Firefox history query failed: %s" % e)
-    conn.close()
-    return rows
-
-
-def firefox_bookmarks(db_path):
-    conn = _open_ro(db_path)
-    cur = conn.cursor()
-    rows = []
-    try:
-        cur.execute(
-            "SELECT b.id, b.title, b.dateAdded, "
-            "(SELECT title FROM moz_bookmarks p WHERE p.id=b.parent) AS parent, "
-            "(SELECT url FROM moz_places pl WHERE pl.id=b.fk) AS url "
-            "FROM moz_bookmarks b"
-        )
-        for bid, title, added, parent, url in cur.fetchall():
-            ts = None
-            if added:
-                try:
-                    ts = (datetime(1970, 1, 1) + timedelta(microseconds=added)).isoformat()
-                except Exception:
-                    ts = None
-            rows.append({
-                "id": bid,
-                "title": title,
-                "url": url,
-                "parent": parent,
-                "date_added": ts,
-            })
-    except sqlite3.Error as e:
-        conn.close()
-        raise ValueError("Bookmark query failed: %s" % e)
-    conn.close()
-    return rows
+def chrome_artifacts(db_path):
+    history = chrome_history(db_path)
+    downloads = chrome_downloads(db_path)
+    return {"history": history, "downloads": downloads}
 
 
 def categorize(url):
@@ -195,123 +116,103 @@ def analyze(history):
     urls = [h for h in history if h.get("url")]
     by_cat = {}
     for u in urls:
-        c = categorize(u.get("url", ""))
-        by_cat.setdefault(c, []).append(u)
+        by_cat.setdefault(categorize(u.get("url", "")), []).append(u)
     return by_cat
 
 
+def visited_url_timeline(history):
+    """Build a visited-URL timeline merged from url and visit records."""
+    events = []
+    for h in history:
+        if h["type"] == "visit" and h.get("visit_time"):
+            events.append({
+                "timestamp": h["visit_time"],
+                "kind": "visit",
+                "url": h.get("url", ""),
+            })
+        elif h["type"] == "url" and h.get("last_visit"):
+            events.append({
+                "timestamp": h["last_visit"],
+                "kind": "url_record",
+                "url": h.get("url", ""),
+                "title": h.get("title", ""),
+                "visit_count": h.get("visit_count"),
+            })
+    events.sort(key=lambda e: e["timestamp"] or "")
+    return events
+
+
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python3 browser.py <chrome|firefox> <db_directory>")
-        return 1
-    kind = sys.argv[1].lower()
-    directory = sys.argv[2]
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="D6 - Browser Forensics",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--input", "-i", help="Path to Chrome History (or profile) SQLite file")
+    parser.add_argument("--output", "-o", help="JSON artifacts output path")
+    parser.add_argument("--demo", action="store_true", help="Analyze built-in fixture")
+    args = parser.parse_args()
 
-    default_files = {
-        "chrome_history": "History",
-        "chrome_bookmarks": "Bookmarks",
-        "firefox_history": "places.sqlite",
-        "firefox_bookmarks": "places.sqlite",
-    }
+    if args.demo:
+        base = os.path.dirname(os.path.abspath(sys.argv[0]))
+        if os.path.basename(base) == "firmware":
+            base = os.path.dirname(base)
+        db = os.path.join(base, "tests", "fixtures", "chrome_history.sqlite")
+        if not os.path.isfile(db):
+            print("[ERROR] Fixture not found: %s" % db)
+            sys.exit(1)
+        artifacts = chrome_artifacts(db)
+        history = artifacts["history"]
+        downloads = artifacts["downloads"]
+        out_dir = os.path.join(base, "reports")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, "d6_artifacts.json")
+        with open(out_path, "w") as f:
+            json.dump(artifacts, f, indent=2, default=str)
 
-    if kind == "chrome":
-        hist_path = os.path.join(directory, default_files["chrome_history"])
-        bm_path = os.path.join(directory, default_files["chrome_bookmarks"])
-        if not os.path.isfile(hist_path):
-            # Chrome may place it in a profile subdir; accept the dir itself
-            hist_path = directory
-        print("=== D6 - Browser Forensics (Chrome) ===")
-        if os.path.isfile(hist_path):
-            try:
-                h = chrome_history(hist_path)
-                print("History entries: %d" % len(h))
-                by_cat = analyze(h)
-                print("\n-- Category breakdown --")
-                for c, items in sorted(by_cat.items()):
-                    print("  %-10s %d" % (c, len(items)))
-                print("\n-- Recent history --")
-                for e in h[:30]:
-                    print("  %s %s" % (e.get("last_visit") or e.get("visit_time") or "?", (e.get("url") or e.get("title") or "")[:80]))
-            except Exception as ex:
-                print("History error: %s" % ex)
-        else:
-            print("History DB not found: %s" % hist_path)
-        if os.path.isfile(bm_path):
-            try:
-                with open(bm_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                print("\n-- Bookmarks --")
-                print("  JSON bookmark file parsed")
-                roots = data.get("roots", {})
-                for rname, rval in roots.items():
-                    n = _count_nodes(rval)
-                    print("  Root: %s (%d nodes)" % (rname, n))
-            except Exception as ex:
-                print("Bookmark error: %s" % ex)
-        else:
-            print("Bookmarks file not found: %s" % bm_path)
-    elif kind == "firefox":
-        hist_path = os.path.join(directory, default_files["firefox_history"])
-        if not os.path.isfile(hist_path):
-            hist_path = directory
-        print("=== D6 - Browser Forensics (Firefox) ===")
-        if os.path.isfile(hist_path):
-            try:
-                h = firefox_history(hist_path)
-                print("History entries: %d" % len(h))
-                by_cat = analyze(h)
-                print("\n-- Category breakdown --")
-                for c, items in sorted(by_cat.items()):
-                    print("  %-10s %d" % (c, len(items)))
-                print("\n-- Recent history --")
-                for e in h[:30]:
-                    print("  %s %s" % (e.get("last_visit") or e.get("visit_time") or "?", (e.get("url") or e.get("title") or "")[:80]))
-            except Exception as ex:
-                print("History error: %s" % ex)
-            try:
-                bm = firefox_bookmarks(hist_path)
-                print("\n-- Bookmarks (%d) --" % len(bm))
-                for b in bm[:30]:
-                    print("  %s %s" % (b.get("date_added") or "?", (b.get("title") or b.get("url") or "")[:70]))
-            except Exception as ex:
-                print("Bookmark error: %s" % ex)
-        else:
-            print("History DB not found: %s" % hist_path)
-    else:
-        print("Unknown browser: %s (use chrome or firefox)" % kind)
-        return 1
-    return 0
+        print("=== D6 - Browser Forensics (Demo) ===")
+        print("History records: %d" % len(history))
+        print("Downloads: %d" % len(downloads))
+        by_cat = analyze(history)
+        print("\n-- Category breakdown --")
+        for c, items in sorted(by_cat.items()):
+            print("  %-10s %d" % (c, len(items)))
+        print("\n-- Visited URL timeline (%d events) --" % len(visited_url_timeline(history)))
+        for e in visited_url_timeline(history)[:15]:
+            print("  %s %s" % (e["timestamp"], e["url"][:60]))
+        if downloads:
+            print("\n-- Downloads --")
+            for d in downloads:
+                print("  %s %s (%d bytes)" % (d["start_time"], d["url"], d["received_bytes"]))
+        print("\nArtifacts JSON written to %s" % out_path)
+        sys.exit(0)
 
+    if not args.input:
+        parser.print_help()
+        sys.exit(1)
 
-def _count_nodes(node):
-    n = 1
-    for child in node.get("children", []):
-        n += _count_nodes(child)
-    return n
+    if not os.path.isfile(args.input):
+        print("Error: file not found: %s" % args.input)
+        sys.exit(1)
 
+    artifacts = chrome_artifacts(args.input)
+    history = artifacts["history"]
+    downloads = artifacts["downloads"]
+    if args.output:
+        os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
+        with open(args.output, "w") as f:
+            json.dump(artifacts, f, indent=2, default=str)
+        print("Artifacts written to %s" % args.output)
 
-# Provide a self-test generating a sample database to demonstrate without real data
-def selftest():
-    import tempfile
-    d = tempfile.mkdtemp()
-    path = os.path.join(d, "History")
-    conn = sqlite3.connect(path)
-    cur = conn.cursor()
-    cur.execute("CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, last_visit_time INTEGER)")
-    cur.execute("CREATE TABLE visits (id INTEGER PRIMARY KEY, url TEXT, visit_time INTEGER, from_visit INTEGER)")
-    epoch = datetime(1601, 1, 1)
-    now_us = int((datetime.now() - epoch).total_seconds() * 1_000_000)
-    cur.execute("INSERT INTO urls VALUES (1, 'https://example.com', 'Example', 2, ?)", (now_us,))
-    cur.execute("INSERT INTO urls VALUES (2, 'https://google.com/search?q=test', 'Search', 1, ?)", (now_us - 1_000_000,))
-    cur.execute("INSERT INTO visits VALUES (1, 'https://example.com', ?, 0)", (now_us,))
-    conn.commit()
-    conn.close()
-    return path
+    print("=== D6 - Browser Forensics ===")
+    print("History records: %d" % len(history))
+    print("Downloads: %d" % len(downloads))
+    by_cat = analyze(history)
+    print("\n-- Category breakdown --")
+    for c, items in sorted(by_cat.items()):
+        print("  %-10s %d" % (c, len(items)))
+    sys.exit(0)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("No arguments; running self-test with generated history...")
-        sp = selftest()
-        sys.argv = [sys.argv[0], "chrome", os.path.dirname(sp)]
-    sys.exit(main())
+    main()
