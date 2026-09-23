@@ -4,67 +4,67 @@
 > prohibited and may be illegal. Read [ETHICS.md](ETHICS.md) and
 > [SCOPE.md](SCOPE.md) before use. Use at your own risk; **AS IS**, no warranty.
 
-# D6 — Browser Forensics
+# D6 — Browser Forensics Collector
 
-Chrome/SQLite history, visits, downloads and bookmark artifact parsing with visited-URL timeline reconstruction.
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![GitHub stars](https://img.shields.io/github/stars/5h4d0wn1k/d6-browser-forensics)
+![Last commit](https://img.shields.io/github/last-commit/5h4d0wn1k/d6-browser-forensics)
+![GitHub issues](https://img.shields.io/github/issues/5h4d0wn1k/d6-browser-forensics)
 
-## IMPORTANT: Read before use.
+**Browser forensics** collector for DFIR and blue-team analysis — parses Chrome/SQLite history, visits, downloads, and bookmark artifacts into a time-ordered visited-URL timeline with category classification (stdlib-only, read-only).
 
-This tool is for **authorized educational and blue-team analysis only**. Analyze browser artifacts only on systems/profiles you own or are permitted to examine. The bundled fixture is fully synthetic (fictional domains). No real personal data is stored.
+## Why
+
+Browser artifacts are among the richest sources of user-activity evidence in **digital forensics and incident response**. D6 turns a Chrome profile's SQLite tables (`urls`, `visits`, `downloads`, `downloads_url_chains`) into a forensic timeline: Chrome-epoch timestamps decoded to ISO datetime, search/social/finance categories, and download provenance (path, source URL, size). Designed for **authorized educational and blue-team analysis only**, it is strictly read-only, bundles a fully synthetic fixture so you can practice without real personal data, and emits artifacts as JSON for downstream tools.
 
 ## Features
 
-- **Chrome SQLite parsing** via stdlib `sqlite3`: `urls`, `visits`, `downloads`, `downloads_url_chains`
-- **Chrome epoch decoding**: microseconds since 1601-01-01 → ISO datetime
-- **Visited-URL timeline**: merges url records and visit events, time-ordered
-- **Category breakdown**: search, social, media, email, finance, other
-- **Download artifact extraction**: path, source URL, size, start time
-- **Artifacts JSON output**
+- **Chrome SQLite parsing** via stdlib `sqlite3` — `urls`, `visits`, `downloads`, `downloads_url_chains`.
+- **Chrome epoch decoding** — microseconds since 1601-01-01 to ISO datetime.
+- **Visited-URL timeline** — merges URL records and visit events, time-ordered.
+- **Category breakdown** — search, social, media, email, finance, other.
+- **Download artifact extraction** — path, source URL, size, start time.
+- **JSON artifacts output** — `-o` for pipeline integration.
 
-## Quick Start
+## Quickstart
 
 ```bash
-# Analyze the bundled synthetic Chrome history fixture
+# Analyze the bundled synthetic Chrome history fixture (offline demo)
 python3 cli.py --demo
 
 # Analyze a real profile's History file (read-only)
 python3 cli.py --input /path/to/Chrome/History --output reports/artifacts.json
 ```
 
-## Parsed Formats
-
-| Table | Data Extracted |
-|-------|----------------|
-| `urls` | url, title, visit_count, last_visit_time |
-| `visits` | url, visit_time, from_visit, visit_duration |
-| `downloads` | path, start_time, received/total bytes |
-| `downloads_url_chains` | download → source URL mapping |
-
-## Testing
-
 ```bash
-python3 -m unittest discover -s tests
-```
-
-Fixtures regenerated with:
-
-```bash
+# Regenerate fixtures (not needed for normal use)
 python3 tests/generate_fixtures.py
+
+# Run the offline test suite
+python3 -m unittest discover -s tests -v
 ```
 
-## Live Lab Test Plan
+## Project structure
 
-1. Run `python3 cli.py --demo` — should exit 0, print history/downloads, write `reports/d6_artifacts.json`
-2. Run `python3 -m unittest discover -s tests` — all tests pass
-3. Verify the visited-URL timeline is time-ordered and downloads include source URLs
+```
+d6-browser-forensics/
+├── cli.py               # CLI entry point
+├── firmware/browser.py  # parsing engine
+├── tests/               # fixtures generator + unittest suite (13 tests)
+└── ETHICS.md, SCOPE.md  # authorized-use rules
+```
 
-## Metrics
+## Documentation
 
-- Formats parsed: Chrome SQLite (`urls`, `visits`, `downloads`, `downloads_url_chains`)
-- Artifact types: 3 (url records, visits, downloads)
-- Test count: 10
-- Demo exit code: 0
+- [ETHICS.md](ETHICS.md) — authorized-use policy
+- [SCOPE.md](SCOPE.md) — analysis scope
+- [SECURITY.md](SECURITY.md) — security policy
+- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution guide
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Analyze only systems/profiles you own or are permitted to examine.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
